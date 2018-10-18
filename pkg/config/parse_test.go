@@ -10,7 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
-const exampleConfigPath = "../../config.example.toml"
+const exampleConfigPath = "../../config.dev.toml"
 
 func compareConfigs(parsedConf *Config, expConf *Config, t *testing.T) {
 	opts := cmpopts.IgnoreTypes(StorageConfig{}, ProxyConfig{}, OlympusConfig{})
@@ -50,6 +50,10 @@ func compareStorageConfigs(parsedStorage *StorageConfig, expStorage *StorageConf
 	if !eq {
 		t.Errorf("Parsed Example Storage configuration did not match expected values. Expected: %+v. Actual: %+v", expStorage.GCP, parsedStorage.GCP)
 	}
+	eq = cmp.Equal(parsedStorage.S3, expStorage.S3)
+	if !eq {
+		t.Errorf("Parsed Example Storage configuration did not match expected values. Expected: %+v. Actual: %+v", expStorage.S3, parsedStorage.S3)
+	}
 }
 
 func TestEnvOverrides(t *testing.T) {
@@ -64,7 +68,8 @@ func TestEnvOverrides(t *testing.T) {
 		ForceSSL:              true,
 		ValidatorHook:         "testhook.io",
 		PathPrefix:            "prefix",
-		NETRCPath:             "/test/path",
+		NETRCPath:             "/test/path/.netrc",
+		HGRCPath:              "/test/path/.hgrc",
 	}
 
 	expOlympus := OlympusConfig{
@@ -149,6 +154,16 @@ func TestStorageEnvOverrides(t *testing.T) {
 				Timeout: globalTimeout,
 			},
 		},
+		S3: &S3Config{
+			Region: "s3Region",
+			Key:    "s3Key",
+			Secret: "s3Secret",
+			Token:  "s3Token",
+			Bucket: "s3Bucket",
+			TimeoutConf: TimeoutConf{
+				Timeout: globalTimeout,
+			},
+		},
 	}
 	envVars := getEnvMap(&Config{Storage: expStorage})
 	envVarBackup := map[string]string{}
@@ -185,6 +200,7 @@ func TestParseExampleConfig(t *testing.T) {
 				EnableSSL: false,
 			},
 			Mongo: &MongoConfig{},
+			S3:    &S3Config{},
 		},
 	}
 	// unset all environment variables
@@ -232,10 +248,10 @@ func TestParseExampleConfig(t *testing.T) {
 			},
 		},
 		Minio: &MinioConfig{
-			Endpoint:  "minio.example.com",
-			Key:       "MY_KEY",
-			Secret:    "MY_SECRET",
-			EnableSSL: true,
+			Endpoint:  "127.0.0.1:9001",
+			Key:       "minio",
+			Secret:    "minio123",
+			EnableSSL: false,
 			Bucket:    "gomods",
 			TimeoutConf: TimeoutConf{
 				Timeout: globalTimeout,
@@ -244,6 +260,17 @@ func TestParseExampleConfig(t *testing.T) {
 		Mongo: &MongoConfig{
 			URL:      "mongodb://127.0.0.1:27017",
 			CertPath: "",
+			TimeoutConf: TimeoutConf{
+				Timeout: globalTimeout,
+			},
+			InsecureConn: false,
+		},
+		S3: &S3Config{
+			Region: "MY_AWS_REGION",
+			Key:    "MY_AWS_ACCESS_KEY_ID",
+			Secret: "MY_AWS_SECRET_ACCESS_KEY",
+			Token:  "",
+			Bucket: "MY_S3_BUCKET_NAME",
 			TimeoutConf: TimeoutConf{
 				Timeout: globalTimeout,
 			},
@@ -283,59 +310,6 @@ func TestParseExampleConfig(t *testing.T) {
 	restoreEnv(envVarBackup)
 }
 
-// TestConfigOverridesDefault validates that a value provided by the config is not overwritten during parsing
-func TestConfigOverridesDefault(t *testing.T) {
-
-	// set values to anything but defaults
-	config := &Config{
-		TimeoutConf: TimeoutConf{
-			Timeout: 1,
-		},
-		Storage: &StorageConfig{
-			Minio: &MinioConfig{
-				Bucket:    "notgomods",
-				EnableSSL: false,
-				TimeoutConf: TimeoutConf{
-					Timeout: 42,
-				},
-			},
-		},
-	}
-
-	// should be identical to config above
-	expConfig := &Config{
-		TimeoutConf: config.TimeoutConf,
-		Storage: &StorageConfig{
-			Minio: &MinioConfig{
-				Bucket:      config.Storage.Minio.Bucket,
-				EnableSSL:   config.Storage.Minio.EnableSSL,
-				TimeoutConf: config.Storage.Minio.TimeoutConf,
-			},
-		},
-	}
-
-	// unset all environment variables
-	envVars := getEnvMap(&Config{})
-	envVarBackup := map[string]string{}
-	for k := range envVars {
-		oldVal := os.Getenv(k)
-		envVarBackup[k] = oldVal
-		os.Unsetenv(k)
-	}
-
-	envOverride(config)
-
-	if config.Timeout != expConfig.Timeout {
-		t.Errorf("Default timeout is overriding specified timeout")
-	}
-
-	if !cmp.Equal(config.Storage.Minio, expConfig.Storage.Minio) {
-		t.Errorf("Default Minio config is overriding specified config")
-	}
-
-	restoreEnv(envVarBackup)
-}
-
 func getEnvMap(config *Config) map[string]string {
 
 	envVars := map[string]string{
@@ -351,6 +325,7 @@ func getEnvMap(config *Config) map[string]string {
 		"ATHENS_FILTER_FILE":            config.FilterFile,
 		"ATHENS_TIMEOUT":                strconv.Itoa(config.Timeout),
 		"ATHENS_ENABLE_CSRF_PROTECTION": strconv.FormatBool(config.EnableCSRFProtection),
+		"ATHENS_TRACE_EXPORTER":         config.TraceExporterURL,
 	}
 
 	proxy := config.Proxy
@@ -365,6 +340,7 @@ func getEnvMap(config *Config) map[string]string {
 		envVars["ATHENS_PROXY_VALIDATOR"] = proxy.ValidatorHook
 		envVars["ATHENS_PATH_PREFIX"] = proxy.PathPrefix
 		envVars["ATHENS_NETRC_PATH"] = proxy.NETRCPath
+		envVars["ATHENS_HGRC_PATH"] = proxy.HGRCPath
 	}
 
 	olympus := config.Olympus
@@ -395,6 +371,14 @@ func getEnvMap(config *Config) map[string]string {
 		if storage.Mongo != nil {
 			envVars["ATHENS_MONGO_STORAGE_URL"] = storage.Mongo.URL
 			envVars["ATHENS_MONGO_CERT_PATH"] = storage.Mongo.CertPath
+			envVars["ATHENS_MONGO_INSECURE"] = strconv.FormatBool(storage.Mongo.InsecureConn)
+		}
+		if storage.S3 != nil {
+			envVars["AWS_REGION"] = storage.S3.Region
+			envVars["AWS_ACCESS_KEY_ID"] = storage.S3.Key
+			envVars["AWS_SECRET_ACCESS_KEY"] = storage.S3.Secret
+			envVars["AWS_SESSION_TOKEN"] = storage.S3.Token
+			envVars["ATHENS_S3_BUCKET_NAME"] = storage.S3.Bucket
 		}
 	}
 	return envVars

@@ -1,11 +1,14 @@
 package stash
 
 import (
+	"context"
+
 	"github.com/gomods/athens/pkg/errors"
+	"github.com/gomods/athens/pkg/observ"
 )
 
 type withpool struct {
-	s Stasher
+	stasher Stasher
 
 	// see download/addons/with_pool
 	// for design docs on about this channel.
@@ -17,8 +20,8 @@ type withpool struct {
 func WithPool(numWorkers int) Wrapper {
 	return func(s Stasher) Stasher {
 		st := &withpool{
-			s:     s,
-			jobCh: make(chan func()),
+			stasher: s,
+			jobCh:   make(chan func()),
 		}
 		st.start(numWorkers)
 		return st
@@ -37,12 +40,14 @@ func (s *withpool) listen() {
 	}
 }
 
-func (s *withpool) Stash(mod, ver string) error {
+func (s *withpool) Stash(ctx context.Context, mod, ver string) error {
 	const op errors.Op = "stash.Pool"
+	ctx, span := observ.StartSpan(ctx, op.String())
+	defer span.End()
 	var err error
 	done := make(chan struct{}, 1)
 	s.jobCh <- func() {
-		err = s.s.Stash(mod, ver)
+		err = s.stasher.Stash(ctx, mod, ver)
 		close(done)
 	}
 	<-done

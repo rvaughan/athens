@@ -6,13 +6,15 @@ import (
 
 	"github.com/gomods/athens/pkg/errors"
 	"github.com/gomods/athens/pkg/module"
+	"github.com/gomods/athens/pkg/observ"
 	"github.com/gomods/athens/pkg/storage"
+	"go.opencensus.io/trace"
 )
 
 // Stasher has the job of taking a module
 // from an upstream entity and stashing it to a Storage Backend.
 type Stasher interface {
-	Stash(string, string) error
+	Stash(ctx context.Context, mod string, ver string) error
 }
 
 // Wrapper helps extend the main stasher's functionality with addons.
@@ -31,20 +33,26 @@ func New(f module.Fetcher, s storage.Backend, wrappers ...Wrapper) Stasher {
 }
 
 type stasher struct {
-	f module.Fetcher
-	s storage.Backend
+	fetcher module.Fetcher
+	storage storage.Backend
 }
 
-func (s *stasher) Stash(mod, ver string) error {
+func (s *stasher) Stash(ctx context.Context, mod, ver string) error {
 	const op errors.Op = "stasher.Stash"
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute*10)
+	_, span := observ.StartSpan(ctx, op.String())
+	defer span.End()
+
+	// create a new context that ditches whatever deadline the caller passed
+	// but keep the tracing info so that we can properly trace the whole thing.
+	ctx, cancel := context.WithTimeout(trace.NewContext(context.Background(), span), time.Minute*10)
 	defer cancel()
+
 	v, err := s.fetchModule(ctx, mod, ver)
 	if err != nil {
 		return errors.E(op, err)
 	}
 	defer v.Zip.Close()
-	err = s.s.Save(ctx, mod, ver, v.Mod, v.Zip, v.Info)
+	err = s.storage.Save(ctx, mod, ver, v.Mod, v.Zip, v.Info)
 	if err != nil {
 		return errors.E(op, err)
 	}
@@ -53,7 +61,7 @@ func (s *stasher) Stash(mod, ver string) error {
 
 func (s *stasher) fetchModule(ctx context.Context, mod, ver string) (*storage.Version, error) {
 	const op errors.Op = "stasher.fetchModule"
-	v, err := s.f.Fetch(ctx, mod, ver)
+	v, err := s.fetcher.Fetch(ctx, mod, ver)
 	if err != nil {
 		return nil, errors.E(op, err)
 	}

@@ -1,17 +1,38 @@
 package mongo
 
 import (
+	"os"
+	"testing"
+
 	"github.com/gomods/athens/pkg/config"
+	"github.com/gomods/athens/pkg/storage/compliance"
+	"github.com/stretchr/testify/require"
 )
 
-func (m *MongoTests) TestNewMongoStorage() {
-	r := m.Require()
-	conf := config.GetConfLogErr(testConfigFile, m.T())
-	getterSaver, err := NewStorage(conf.Storage.Mongo)
+func TestBackend(t *testing.T) {
+	backend := getStorage(t)
+	compliance.RunTests(t, backend, backend.clear)
+}
 
-	r.NoError(err)
-	r.NotNil(getterSaver.c)
-	r.NotNil(getterSaver.d)
-	r.NotNil(getterSaver.s)
-	r.Equal(getterSaver.url, conf.Storage.Mongo.URL)
+func (m *ModuleStore) clear() error {
+	m.s.DB(m.d).C(m.c).DropCollection()
+
+	return m.initDatabase()
+}
+
+func BenchmarkBackend(b *testing.B) {
+	backend := getStorage(b)
+	compliance.RunBenchmarks(b, backend, backend.clear)
+}
+
+func getStorage(tb testing.TB) *ModuleStore {
+	url := os.Getenv("ATHENS_MONGO_URL")
+	if url == "" {
+		tb.SkipNow()
+	}
+
+	backend, err := NewStorage(&config.MongoConfig{URL: url})
+	require.NoError(tb, err)
+
+	return backend
 }

@@ -1,6 +1,7 @@
 ---
 title: Install Athens on Kubernetes
 description: Installing an Athens Instance on Kubernetes
+weight: 1
 ---
 
 When you follow the instructions in the [Walkthrough](/walkthrough), you end up with an Athens Proxy that uses in-memory storage. This is only suitable for trying out the proxy for a short period of time, as you will quickly run out of memory and Athens won't persist modules between restarts. In order to run a more production-like proxy, you may with to run Athens on a [Kubernetes](https://kubernetes.io/) cluster. To aid in deployment of the Athens proxy on Kubernetes, a [Helm](https://www.helm.sh/) chart has been provided. This guide will walk you through installing Athens on a Kubernetes cluster using Helm.
@@ -88,6 +89,10 @@ This will deploy a single Athens instance in the `default` namespace with `disk`
 
 ## Advanced Configuration
 
+### Give Athens access to private repositories via Github Token (Optional)
+1. Create a token at https://github.com/settings/tokens
+2. Provide the token to the proxy either through the config.toml file or by setting the `ATHENS_GITHUB_TOKEN` environment variable.
+
 ### Storage Providers
 
 The Helm chart currently supports running Athens with two different storage providers: `disk` and `mongo`. The default behavior is to use the `disk` storage provider.
@@ -149,4 +154,19 @@ By default, the chart will install Athens with a replica count of 1. To change t
 
 ```console
 helm install ./charts/proxy -n athens --set replicaCount=3
+```
+
+### .netrc file support
+
+A `.netrc` file can be shared as a secret to allow the access to private modules.
+The secret must be created from a `netrc` file using the following command (the name of the file **must** be netrc):
+
+```console
+kubectl create secret generic netrcsecret --from-file=./netrc
+```
+
+In order to instruct athens to fetch and use the secret, `netrc.enabled` flag must be set to true:
+
+```console
+helm install ./charts/proxy -n athens --set netrc.enabled=true
 ```

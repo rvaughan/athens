@@ -2,14 +2,13 @@ package actions
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/gobuffalo/buffalo"
 	"github.com/gobuffalo/buffalo/middleware"
 	"github.com/gobuffalo/buffalo/middleware/csrf"
-	"github.com/gobuffalo/buffalo/middleware/i18n"
 	"github.com/gobuffalo/buffalo/middleware/ssl"
 	"github.com/gobuffalo/buffalo/render"
-	"github.com/gobuffalo/packr"
 	"github.com/gomods/athens/pkg/config"
 	"github.com/gomods/athens/pkg/log"
 	mw "github.com/gomods/athens/pkg/middleware"
@@ -23,23 +22,10 @@ import (
 // Service is the name of the service that we want to tag our processes with
 const Service = "proxy"
 
-// T is the translator to use
-var T *i18n.Translator
-
-func init() {
-	proxy = render.New(render.Options{
-		// HTML layout to be used for all HTML requests:
-		HTMLLayout:       "application.html",
-		JavaScriptLayout: "application.js",
-
-		// Box containing all of the templates:
-		TemplatesBox: packr.NewBox("../templates/proxy"),
-		AssetsBox:    assetsBox,
-
-		// Add template helpers here:
-		Helpers: render.Helpers{},
-	})
-}
+var proxy = render.New(render.Options{
+	// Add template helpers here:
+	Helpers: render.Helpers{},
+})
 
 // App is where all routes and middleware for buffalo
 // should be defined. This is the nerve center of your
@@ -54,9 +40,22 @@ func App(conf *config.Config) (*buffalo.App, error) {
 		return nil, err
 	}
 
+	if conf.Proxy.GithubToken != "" {
+		if conf.Proxy.NETRCPath != "" {
+			fmt.Println("Cannot provide both GithubToken and NETRCPath. Only provide one.")
+			os.Exit(1)
+		}
+
+		netrcFromToken(conf.Proxy.GithubToken)
+	}
+
 	// mount .netrc to home dir
 	// to have access to private repos.
-	initializeNETRC(conf.Proxy.NETRCPath)
+	initializeAuthFile(conf.Proxy.NETRCPath)
+
+	// mount .hgrc to home dir
+	// to have access to private repos.
+	initializeAuthFile(conf.Proxy.HGRCPath)
 
 	logLvl, err := logrus.ParseLevel(conf.LogLevel)
 	if err != nil {
@@ -78,6 +77,8 @@ func App(conf *config.Config) (*buffalo.App, error) {
 		SessionName: "_athens_session",
 		Logger:      blggr,
 		Addr:        conf.Proxy.Port,
+		WorkerOff:   true,
+		Host:        "http://127.0.0.1" + conf.Proxy.Port,
 	})
 	if prefix := conf.Proxy.PathPrefix; prefix != "" {
 		// certain Ingress Controllers (such as GCP Load Balancer)
@@ -88,12 +89,22 @@ func App(conf *config.Config) (*buffalo.App, error) {
 		app = app.Group(prefix)
 	}
 
-	// Register exporter to export traces
-	exporter, err := observ.RegisterTraceExporter(Service, ENV)
+	// RegisterExporter will register an exporter where we will export our traces to.
+	// The error from the RegisterExporter would be nil if the tracer was specified by
+	// the user and the trace exporter was created successfully.
+	// RegisterExporter returns the function that all traces are flushed to the exporter
+	// and the exporter needs to be stopped. The function should be called when the exporter
+	// is no longer needed.
+	flushTraces, err := observ.RegisterExporter(
+		conf.TraceExporter,
+		conf.TraceExporterURL,
+		Service,
+		ENV,
+	)
 	if err != nil {
-		lggr.SystemErr(err)
+		lggr.Infof("%s", err)
 	} else {
-		defer exporter.Flush()
+		defer flushTraces()
 		app.Use(observ.Tracer(Service))
 	}
 
@@ -114,11 +125,6 @@ func App(conf *config.Config) (*buffalo.App, error) {
 		csrfMiddleware := csrf.New
 		app.Use(csrfMiddleware)
 	}
-	// Setup and use translations:
-	if T, err = i18n.New(packr.NewBox("../locales"), "en-US"); err != nil {
-		app.Stop(err)
-	}
-	app.Use(T.Middleware())
 
 	if !conf.Proxy.FilterOff {
 		mf := module.NewFilter(conf.FilterFile)
@@ -139,10 +145,6 @@ func App(conf *config.Config) (*buffalo.App, error) {
 		err = fmt.Errorf("error adding proxy routes (%s)", err)
 		return nil, err
 	}
-
-	// serve files from the public directory:
-	// has to be last
-	app.ServeFiles("/", assetsBox)
 
 	return app, nil
 }

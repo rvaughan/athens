@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
-	"testing"
 
 	"github.com/BurntSushi/toml"
 	"github.com/kelseyhightower/envconfig"
@@ -25,6 +24,8 @@ type Config struct {
 	CloudRuntime         string `validate:"required" envconfig:"ATHENS_CLOUD_RUNTIME"`
 	FilterFile           string `envconfig:"ATHENS_FILTER_FILE"`
 	EnableCSRFProtection bool   `envconfig:"ATHENS_ENABLE_CSRF_PROTECTION"`
+	TraceExporterURL     string `envconfig:"ATHENS_TRACE_EXPORTER_URL"`
+	TraceExporter        string `envconfig:"ATHENS_TRACE_EXPORTER"`
 	Proxy                *ProxyConfig
 	Olympus              *OlympusConfig `validate:"-"` // ignoring validation until Olympus is up.
 	Storage              *StorageConfig
@@ -97,15 +98,4 @@ func GetConf(path string) (*Config, error) {
 		return nil, fmt.Errorf("Unable to parse test config file: %s", err.Error())
 	}
 	return conf, nil
-}
-
-// GetConfLogErr is similar to GetConf, except it logs a failure for the calling test
-// if any errors are encountered
-func GetConfLogErr(path string, t *testing.T) *Config {
-	c, err := GetConf(path)
-	if err != nil {
-		t.Fatalf("Unable to parse config file: %s", err.Error())
-		return nil
-	}
-	return c
 }
